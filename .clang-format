@@ -25,9 +25,16 @@ ConstructorInitializerIndentWidth: 4
 PackConstructorInitializers: NextLine
 
 EmptyLineBeforeAccessModifier: LogicalBlock
-SeparateDefinitionBlocks: Always
+# Leave, not Always: a run of one-line accessors reads better packed, and the
+# author is better placed than the formatter to know where a break helps.
+SeparateDefinitionBlocks: Leave
 FixNamespaceComments: true
-SpaceAfterTemplateKeyword: false
+
+# A template head always gets its own line. Otherwise a constrained
+# declaration collapses into `template<C T> class Foo {`, which buries the
+# constraint in the same line as the class name.
+AlwaysBreakTemplateDeclarations: Yes
+SpaceAfterTemplateKeyword: true
 
 SortIncludes: CaseSensitive
 IncludeBlocks: Regroup
