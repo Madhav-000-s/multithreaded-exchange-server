@@ -1,0 +1,46 @@
+# ---- Build output -------------------------------------------------------
+build/
+build-*/
+cmake-build-*/
+out/
+_deps/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+compile_commands.json
+Testing/
+
+# ---- Runtime artefacts --------------------------------------------------
+*.wal
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ---- Crash / profiling output -------------------------------------------
+# NB: deliberately not a bare `core` pattern -- that would shadow core/.
+core.[0-9]*
+vgcore.*
+perf.data
+perf.data.old
+callgrind.out.*
+cachegrind.out.*
+
+# ---- Editor / OS --------------------------------------------------------
+.vscode/
+.idea/
+.cache/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Local working notes ------------------------------------------------
+# Design docs and engineering journals kept alongside the repo but
+# deliberately untracked; their substance lands in README.md at Phase 7.
+ARCHITECTURE.md
+PLAN.md
+DECISIONS.md
+BUGS.md

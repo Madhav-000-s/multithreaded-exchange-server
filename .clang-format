@@ -1,0 +1,47 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+
+ColumnLimit: 100
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+NamespaceIndentation: None
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+AlignAfterOpenBracket: Align
+
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4
+PackConstructorInitializers: NextLine
+
+EmptyLineBeforeAccessModifier: LogicalBlock
+SeparateDefinitionBlocks: Always
+FixNamespaceComments: true
+SpaceAfterTemplateKeyword: false
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Own component headers first, so a translation unit proves its headers
+  # are self-contained rather than leaning on a prior include.
+  - Regex: '^"(analytics|concurrent|core|net|store)/'
+    Priority: 1
+  - Regex: '^"'
+    Priority: 2
+  - Regex: '^<gtest/|^<gmock/'
+    Priority: 3
+  # C++ standard library headers have no dot; platform headers do.
+  - Regex: '^<[^.]+>$'
+    Priority: 5
+  - Regex: '^<'
+    Priority: 4

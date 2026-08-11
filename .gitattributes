@@ -1,0 +1,7 @@
+# The repository lives on a Windows filesystem but is built exclusively under
+# WSL/Linux. Normalise to LF in the index and in the working tree so the
+# checkout the compiler sees is byte-identical on either side.
+* text=auto eol=lf
+
+*.png binary
+*.wal binary
