@@ -1,0 +1,195 @@
+#pragma once
+
+#include "core/order.hpp"
+#include "core/price_level.hpp"
+#include "core/types.hpp"
+
+#include <cassert>
+#include <concepts>
+#include <cstddef>
+#include <map>
+#include <memory>
+#include <optional>
+#include <unordered_map>
+#include <utility>
+
+namespace exchange {
+
+/// Constrains OrderBook's parameter to something that actually orders prices.
+///
+/// A C++20 concept rather than an unconstrained template: instantiating with a
+/// comparator of the wrong shape otherwise fails deep inside std::map with a
+/// page of instantiation backtrace. With the constraint, the error names the
+/// requirement that was not met, at the point of use.
+template <typename Cmp>
+concept PriceComparator = std::strict_weak_order<Cmp, Price, Price>;
+
+/// One side of the book: every resting order, grouped by price.
+///
+/// Templated on the ordering so bids and asks are the *same* class. With
+/// `std::greater` the highest price sorts first; with `std::less` the lowest
+/// does. Either way `levels_.begin()` is the best price, so "walk outward from
+/// the touch" is written once and both sides get it. Writing a BidBook and an
+/// AskBook separately would duplicate every traversal and guarantee that a fix
+/// eventually lands in only one of them.
+///
+/// @tparam PriceCompare BidOrdering (std::greater) or AskOrdering (std::less).
+template <PriceComparator PriceCompare>
+class OrderBook {
+public:
+    using Levels = std::map<Price, PriceLevel, PriceCompare>;
+
+    /// Where a resting order lives. Storing the price rather than a pointer to
+    /// the PriceLevel keeps this valid across level creation and destruction,
+    /// and keeps it meaningful for Phase 7's flat-array book, where levels are
+    /// array slots and pointers into them would not survive a resize.
+    struct Locator {
+        Price price{};
+        PriceLevel::Iterator position{};
+    };
+
+    OrderBook() = default;
+    OrderBook(const OrderBook&) = delete;
+    OrderBook& operator=(const OrderBook&) = delete;
+    OrderBook(OrderBook&&) noexcept = default;
+    OrderBook& operator=(OrderBook&&) noexcept = default;
+    ~OrderBook() = default;
+
+    [[nodiscard]] bool empty() const noexcept { return levels_.empty(); }
+
+    [[nodiscard]] std::size_t levelCount() const noexcept { return levels_.size(); }
+
+    [[nodiscard]] std::size_t orderCount() const noexcept { return index_.size(); }
+
+    /// Best price on this side, or nullopt when the side is empty.
+    [[nodiscard]] std::optional<Price> bestPrice() const noexcept {
+        if (levels_.empty()) {
+            return std::nullopt;
+        }
+        return levels_.begin()->first;
+    }
+
+    [[nodiscard]] PriceLevel* bestLevel() noexcept {
+        return levels_.empty() ? nullptr : &levels_.begin()->second;
+    }
+
+    [[nodiscard]] const PriceLevel* levelAt(Price price) const noexcept {
+        const auto it = levels_.find(price);
+        return it == levels_.end() ? nullptr : &it->second;
+    }
+
+    /// Resting quantity at one price, hidden size included. Zero if no level.
+    [[nodiscard]] Quantity qtyAt(Price price) const noexcept {
+        const PriceLevel* level = levelAt(price);
+        return level == nullptr ? Quantity{0} : level->totalQty();
+    }
+
+    [[nodiscard]] const Order* find(OrderId id) const noexcept {
+        const auto it = index_.find(id);
+        return it == index_.end() ? nullptr : it->second.position->get();
+    }
+
+    [[nodiscard]] const Levels& levels() const noexcept { return levels_; }
+
+    /// Rests an order, creating its price level if needed.
+    /// Precondition: order->restingPrice() has a value.
+    void insert(std::unique_ptr<Order> order) {
+        assert(order != nullptr);
+        const std::optional<Price> price = order->restingPrice();
+        assert(price.has_value() && "a non-resting order must never reach insert()");
+
+        const OrderId id = order->id();
+        assert(index_.find(id) == index_.end() && "duplicate order id");
+
+        // try_emplace constructs the level in place only when absent, so an
+        // existing queue is never disturbed by a rebuild.
+        const auto levelIt = levels_.try_emplace(*price, *price).first;
+        const PriceLevel::Iterator position = levelIt->second.enqueue(std::move(order));
+
+        index_.emplace(id, Locator{.price = *price, .position = position});
+    }
+
+    /// Removes a resting order and hands back ownership; nullptr if unknown.
+    ///
+    /// O(1) in the number of *orders*, which is the property that matters: the
+    /// hash index goes straight to the list node, and unlinking it is three
+    /// pointer writes. There is no scan of the level. The residual cost is the
+    /// O(log levels) map lookup to reach the level -- levels number in the
+    /// hundreds where orders number in the millions, and Phase 7's flat array
+    /// removes even that.
+    [[nodiscard]] std::unique_ptr<Order> cancel(OrderId id) {
+        const auto indexIt = index_.find(id);
+        if (indexIt == index_.end()) {
+            return nullptr;
+        }
+
+        const Locator locator = indexIt->second;
+        index_.erase(indexIt);
+
+        const auto levelIt = levels_.find(locator.price);
+        assert(levelIt != levels_.end() && "index names a level that does not exist");
+
+        std::unique_ptr<Order> order = levelIt->second.extract(locator.position);
+
+        // An empty level is dropped so that bestPrice() cannot report a price
+        // with nothing behind it, and so the map does not accumulate every
+        // price ever touched.
+        if (levelIt->second.empty()) {
+            levels_.erase(levelIt);
+        }
+        return order;
+    }
+
+    /// Drops an index entry for an order the matcher has already unlinked.
+    ///
+    /// The strategy owns level surgery but cannot see the index, so the book
+    /// reconciles afterwards. Phase 3 inverts this -- the strategy will return
+    /// a plan and the book will perform every mutation itself -- which is what
+    /// makes the strong guarantee achievable.
+    void unindex(OrderId id) noexcept { index_.erase(id); }
+
+    /// Discards the best level once matching has emptied it.
+    void dropBestLevelIfEmpty() noexcept {
+        if (!levels_.empty() && levels_.begin()->second.empty()) {
+            levels_.erase(levels_.begin());
+        }
+    }
+
+    /// Resting order plus the handle needed to mutate it in place.
+    struct Located {
+        PriceLevel* level{nullptr};
+        PriceLevel::Iterator position{};
+    };
+
+    [[nodiscard]] std::optional<Located> locate(OrderId id) noexcept {
+        const auto indexIt = index_.find(id);
+        if (indexIt == index_.end()) {
+            return std::nullopt;
+        }
+        const auto levelIt = levels_.find(indexIt->second.price);
+        assert(levelIt != levels_.end());
+        return Located{.level = &levelIt->second, .position = indexIt->second.position};
+    }
+
+    /// Total resting quantity across every level on this side.
+    [[nodiscard]] Quantity totalQty() const noexcept {
+        Quantity total = 0;
+        for (const auto& entry : levels_) {
+            total += entry.second.totalQty();
+        }
+        return total;
+    }
+
+private:
+    Levels levels_;
+
+    /// OrderId to location. Per side rather than shared, so this class is
+    /// self-contained and testable on its own; Book pays two hash lookups on a
+    /// cancel instead of one, which is still O(1).
+    std::unordered_map<OrderId, Locator> index_;
+};
+
+using BidBook = OrderBook<BidOrdering>; // best bid = highest price
+using AskBook = OrderBook<AskOrdering>; // best ask = lowest price
+
+} // namespace exchange

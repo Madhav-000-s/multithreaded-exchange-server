@@ -20,7 +20,10 @@ FetchContent_MakeAvailable(googletest)
 add_executable(exchange_tests
     smoke_test.cpp
     order_test.cpp
-    price_level_test.cpp)
+    price_level_test.cpp
+    order_book_test.cpp
+    book_test.cpp
+    iceberg_test.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
 # reaching into the project proper is spelled "core/...".

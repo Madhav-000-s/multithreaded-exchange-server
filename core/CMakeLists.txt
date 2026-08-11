@@ -3,7 +3,9 @@
 add_library(exchange_core STATIC
     fill.cpp
     order.cpp
-    price_level.cpp)
+    price_level.cpp
+    price_time_strategy.cpp
+    book.cpp)
 
 add_library(exchange::core ALIAS exchange_core)
 
