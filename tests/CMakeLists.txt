@@ -18,7 +18,13 @@ set(BUILD_GMOCK ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(exchange_tests
-    smoke_test.cpp)
+    smoke_test.cpp
+    order_test.cpp
+    price_level_test.cpp)
+
+# Test-local headers (order_factory.hpp) are included unqualified; everything
+# reaching into the project proper is spelled "core/...".
+target_include_directories(exchange_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 target_link_libraries(exchange_tests PRIVATE
     exchange::flags
