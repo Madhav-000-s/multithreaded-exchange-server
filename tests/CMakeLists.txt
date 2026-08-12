@@ -23,7 +23,8 @@ add_executable(exchange_tests
     price_level_test.cpp
     order_book_test.cpp
     book_test.cpp
-    iceberg_test.cpp)
+    iceberg_test.cpp
+    book_iterator_test.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
 # reaching into the project proper is spelled "core/...".

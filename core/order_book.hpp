@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/book_iterator.hpp"
 #include "core/order.hpp"
 #include "core/price_level.hpp"
 #include "core/types.hpp"
@@ -7,9 +8,12 @@
 #include <cassert>
 #include <concepts>
 #include <cstddef>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
+#include <ranges>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -48,12 +52,34 @@ public:
         PriceLevel::Iterator position{};
     };
 
+    /// Flattened order-level traversal, best price first and in queue order
+    /// within a price. See core/book_iterator.hpp for why this is a forward
+    /// iterator and not something stronger.
+    using iterator = BookIteratorImpl<Levels, false>;
+    using const_iterator = BookIteratorImpl<Levels, true>;
+
     OrderBook() = default;
     OrderBook(const OrderBook&) = delete;
     OrderBook& operator=(const OrderBook&) = delete;
     OrderBook(OrderBook&&) noexcept = default;
     OrderBook& operator=(OrderBook&&) noexcept = default;
     ~OrderBook() = default;
+
+    [[nodiscard]] iterator begin() noexcept { return iterator{levels_.begin(), levels_.end()}; }
+
+    [[nodiscard]] iterator end() noexcept { return iterator{levels_.end(), levels_.end()}; }
+
+    [[nodiscard]] const_iterator begin() const noexcept {
+        return const_iterator{levels_.begin(), levels_.end()};
+    }
+
+    [[nodiscard]] const_iterator end() const noexcept {
+        return const_iterator{levels_.end(), levels_.end()};
+    }
+
+    [[nodiscard]] const_iterator cbegin() const noexcept { return begin(); }
+
+    [[nodiscard]] const_iterator cend() const noexcept { return end(); }
 
     [[nodiscard]] bool empty() const noexcept { return levels_.empty(); }
 
@@ -188,6 +214,25 @@ private:
     /// cancel instead of one, which is still O(1).
     std::unordered_map<OrderId, Locator> index_;
 };
+
+// The iterator's traits are a promise to the standard library, so verify the
+// promise rather than assume it. If iterator_category, the reference type or
+// the equality operator were wrong, every algorithm would still compile and
+// some would quietly do the wrong thing; these fail the build instead.
+static_assert(std::forward_iterator<OrderBook<BidOrdering>::iterator>);
+static_assert(std::forward_iterator<OrderBook<BidOrdering>::const_iterator>);
+static_assert(std::ranges::forward_range<OrderBook<BidOrdering>>);
+static_assert(std::ranges::forward_range<const OrderBook<BidOrdering>>);
+
+// begin() and end() share a type, so the book is a common_range and the
+// classic two-iterator algorithms work on it, not only the ranges ones.
+static_assert(std::ranges::common_range<OrderBook<BidOrdering>>);
+
+// Const-correctness of the traversal: a const book must not hand out a
+// mutable reference to a resting order.
+static_assert(
+    std::is_same_v<std::iter_reference_t<OrderBook<BidOrdering>::const_iterator>, const Order&>);
+static_assert(std::is_same_v<std::iter_reference_t<OrderBook<BidOrdering>::iterator>, Order&>);
 
 using BidBook = OrderBook<BidOrdering>; // best bid = highest price
 using AskBook = OrderBook<AskOrdering>; // best ask = lowest price
