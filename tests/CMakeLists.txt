@@ -24,7 +24,8 @@ add_executable(exchange_tests
     order_book_test.cpp
     book_test.cpp
     iceberg_test.cpp
-    book_iterator_test.cpp)
+    book_iterator_test.cpp
+    analytics_test.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
 # reaching into the project proper is spelled "core/...".
@@ -53,3 +54,11 @@ include(GoogleTest)
 # binary, so a failure names the case and -j actually parallelises.
 gtest_discover_tests(exchange_tests
     DISCOVERY_TIMEOUT 30)
+
+# Phase 2's exit criterion is a property of the source, not of a running
+# binary, so it is checked as a source-level test rather than asserted in a
+# comment. A rule nothing enforces decays on the next commit.
+add_test(NAME AnalyticsHasNoRawLoops
+    COMMAND "${CMAKE_COMMAND}"
+        -D "ANALYTICS_DIR=${PROJECT_SOURCE_DIR}/analytics"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/check_no_raw_loops.cmake")
