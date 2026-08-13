@@ -2,6 +2,7 @@
 
 #include "core/book_iterator.hpp"
 #include "core/order.hpp"
+#include "core/precondition.hpp"
 #include "core/price_level.hpp"
 #include "core/types.hpp"
 
@@ -42,6 +43,11 @@ template <PriceComparator PriceCompare>
 class OrderBook {
 public:
     using Levels = std::map<Price, PriceLevel, PriceCompare>;
+    // The commit phase claims that installing a level node and erasing a level
+    // cannot throw. Both reduce to comparisons, so that claim is only true if
+    // the comparator is nothrow. Check rather than trust.
+    static_assert(std::is_nothrow_invocable_r_v<bool, PriceCompare, Price, Price>,
+                  "the price comparator must not throw");
 
     /// Where a resting order lives. Storing the price rather than a pointer to
     /// the PriceLevel keeps this valid across level creation and destruction,
@@ -117,6 +123,93 @@ public:
 
     [[nodiscard]] const Levels& levels() const noexcept { return levels_; }
 
+    // -----------------------------------------------------------------------
+    // Primitives for the two-phase submit path.
+    //
+    // Split apart precisely along the line that matters for exception safety:
+    // ensureLevel and indexOrder allocate and may throw, adopt and eraseLevel
+    // cannot. Book::submit performs every throwing step while the book is
+    // still untouched, then commits through the non-throwing ones. Fusing them
+    // back into a single insert() is what made the old code merely basic.
+    // -----------------------------------------------------------------------
+
+    /// Returns the level at `price`, creating it if absent. May throw; on
+    /// failure the side is unchanged.
+    PriceLevel& ensureLevel(Price price) { return levels_.try_emplace(price, price).first->second; }
+
+    /// Drops a level. Used to undo an ensureLevel that a later throwing step
+    /// made pointless, and to tidy up after matching.
+    void eraseLevel(Price price) noexcept { levels_.erase(price); }
+
+    /// Records where a resting order lives. May throw; on failure the index is
+    /// unchanged.
+    void indexOrder(OrderId id, Price price, PriceLevel::Iterator position) {
+        EXCHANGE_PRECONDITION(index_.find(id) == index_.end());
+        index_.emplace(id, Locator{.price = price, .position = position});
+    }
+
+    /// Grows the hash table ahead of `additional` insertions, so the insertion
+    /// itself cannot rehash.
+    void reserveIndex(std::size_t additional) { index_.reserve(index_.size() + additional); }
+
+    /// Discards levels emptied by matching.
+    ///
+    /// Only from the front: an aggressor consumes the book outward from the
+    /// touch, so any level it emptied is at the head. Scanning the whole map
+    /// would be O(levels) on every submit for no benefit.
+    void dropEmptyLevelsFromFront() noexcept {
+        while (!levels_.empty() && levels_.begin()->second.empty()) {
+            levels_.erase(levels_.begin());
+        }
+    }
+
+    /// Mutable level access, for the planner and the commit phase.
+    [[nodiscard]] Levels& levels() noexcept { return levels_; }
+
+    // -----------------------------------------------------------------------
+    // Pre-allocated commit tokens.
+    //
+    // The remaining obstacle to a non-throwing commit is that both containers
+    // are node-based: every insertion allocates. C++17 node handles split that
+    // allocation away from the insertion, so the node can be built while a
+    // throw is still free and installed once it must not be.
+    //
+    // insert(node_type&&) allocates nothing. For the map it only compares, and
+    // the comparator is asserted nothrow below. For the hash table it can
+    // still rehash, which reserveIndex() is called beforehand to rule out.
+    // -----------------------------------------------------------------------
+
+    using LevelNode = typename Levels::node_type;
+    using IndexNode = typename std::unordered_map<OrderId, Locator>::node_type;
+
+    /// Builds a detached level node. May throw; touches nothing.
+    [[nodiscard]] static LevelNode makeLevelNode(Price price) {
+        Levels scratch;
+        scratch.try_emplace(price, price);
+        return scratch.extract(scratch.begin());
+    }
+
+    /// Builds a detached index node. May throw; touches nothing.
+    [[nodiscard]] static IndexNode makeIndexNode(OrderId id) {
+        std::unordered_map<OrderId, Locator> scratch;
+        scratch.try_emplace(id, Locator{});
+        return scratch.extract(scratch.begin());
+    }
+
+    /// Installs a pre-built level node, or discards it if the price already
+    /// has a level. Returns the level either way.
+    [[nodiscard]] PriceLevel& installLevel(LevelNode&& node) noexcept {
+        auto result = levels_.insert(std::move(node));
+        return result.position->second;
+    }
+
+    /// Points a pre-built index node at `position` and installs it.
+    /// Precondition: reserveIndex has made room, so this cannot rehash.
+    void installIndex(IndexNode&& node, Price price, PriceLevel::Iterator position) noexcept {
+        node.mapped() = Locator{.price = price, .position = position};
+        index_.insert(std::move(node));
+    }
+
     /// Rests an order, creating its price level if needed.
     /// Precondition: order->restingPrice() has a value.
     void insert(std::unique_ptr<Order> order) {
@@ -143,7 +236,7 @@ public:
     /// O(log levels) map lookup to reach the level -- levels number in the
     /// hundreds where orders number in the millions, and Phase 7's flat array
     /// removes even that.
-    [[nodiscard]] std::unique_ptr<Order> cancel(OrderId id) {
+    [[nodiscard]] std::unique_ptr<Order> cancel(OrderId id) noexcept {
         const auto indexIt = index_.find(id);
         if (indexIt == index_.end()) {
             return nullptr;

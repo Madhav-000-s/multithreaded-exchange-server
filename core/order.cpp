@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <memory>
 
 namespace exchange {
 
@@ -83,6 +84,29 @@ void IcebergOrder::reduceTo(Quantity newQty) noexcept {
     // Displayed size can only fall, so shrinking cannot buy exposure.
     visible_ = std::min(visible_, newQty);
     display_ = std::min(display_, newQty);
+}
+
+// ---------------------------------------------------------------------------
+// cloneAmended
+//
+// Each type carries over exactly what survives an amendment: identity, side
+// and account always; the display size for an iceberg, because the participant
+// chose it independently of the size being amended.
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<Order> LimitOrder::cloneAmended(Quantity newQty, Price newPrice) const {
+    return std::make_unique<LimitOrder>(id(), side(), account(), newQty, newPrice);
+}
+
+std::unique_ptr<Order> MarketOrder::cloneAmended(Quantity newQty, Price) const {
+    // Unreachable in practice: a market order never rests, so modify can never
+    // find one to amend. Implemented rather than left to throw because the
+    // hierarchy should not have a hole in it that only a comment guards.
+    return std::make_unique<MarketOrder>(id(), side(), account(), newQty);
+}
+
+std::unique_ptr<Order> IcebergOrder::cloneAmended(Quantity newQty, Price newPrice) const {
+    return std::make_unique<IcebergOrder>(id(), side(), account(), newQty, newPrice, display_);
 }
 
 } // namespace exchange

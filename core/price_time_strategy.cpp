@@ -1,77 +1,109 @@
 #include "core/price_time_strategy.hpp"
 
+#include "core/precondition.hpp"
+
 #include <algorithm>
-#include <cassert>
-#include <utility>
+#include <deque>
 
 namespace exchange {
+namespace {
 
-MatchResult PriceTimeStrategy::match(Order& aggressor, PriceLevel& level) {
-    MatchResult result;
+/// A resting order's simulated state during planning.
+///
+/// The plan has to predict a whole sweep without touching the book, and an
+/// iceberg's behaviour depends on quantities that change as the sweep
+/// proceeds. Mirroring those quantities locally is what lets the prediction be
+/// exact while the real orders stay untouched.
+struct Pending {
+    PriceLevel::Iterator position;
+    AccountId account;
+    OrderId id;
+    Quantity remaining;
+    Quantity visible;
+    Quantity display;
+};
 
-    // Always re-read the front rather than advancing an iterator. An iceberg
-    // that replenishes is spliced to the *back* of this same level, so a
-    // forward walk would step past it and never come back -- a large aggressor
-    // would stop early with quantity left and quantity available. Working from
-    // the head instead means a requeued order is naturally reachable again
-    // once everything ahead of it is consumed.
-    while (aggressor.remaining() > 0 && !level.empty()) {
-        const PriceLevel::Iterator front = level.begin();
-        Order& resting = **front;
+} // namespace
 
-        if (resting.account() == aggressor.account()) {
-            // Self-match prevention, "cancel newest": the aggressor stops
-            // here and its remainder is cancelled by the caller.
+void PriceTimeStrategy::plan(const Order& aggressor, Quantity available, PriceLevel& level,
+                             MatchPlan& into) const {
+    // A working copy of the queue. Allocating here is deliberate and safe: it
+    // happens during planning, where a throw costs nothing because the book
+    // has not been touched.
+    std::deque<Pending> queue;
+    std::transform(level.begin(), level.end(), std::back_inserter(queue),
+                   [](const std::unique_ptr<Order>& resting) {
+                       return Pending{.position = {},
+                                      .account = resting->account(),
+                                      .id = resting->id(),
+                                      .remaining = resting->remaining(),
+                                      .visible = resting->visibleQty(),
+                                      .display = resting->displaySize()};
+                   });
+
+    // std::transform cannot hand the lambda the iterator itself, so the
+    // positions are stitched on afterwards. Both sequences are the level's
+    // queue in the same order, so they line up element for element.
+    auto position = level.begin();
+    std::for_each(queue.begin(), queue.end(), [&position](Pending& pending) {
+        pending.position = position;
+        ++position;
+    });
+
+    // Work from the head, exactly as the commit phase will. An iceberg that
+    // replenishes goes to the *back* of this same level, so a forward walk
+    // would step past it and stop early with quantity left on both sides.
+    while (available > 0 && !queue.empty()) {
+        Pending& front = queue.front();
+
+        if (front.account == aggressor.account()) {
+            // Self-match prevention, "cancel newest": the aggressor stops here
+            // and its remainder is cancelled by the caller.
             //
-            // Rejected: cancelling the *resting* order instead, which is what
-            // CME defaults to. It keeps the aggressor working, but it lets
-            // anyone remove their own queue position by sending a crossing
-            // order -- a cheap way to jump the queue on the reprice. Rejected
-            // also: decrementing both, which is the most "fair" but produces
-            // a phantom trade at a real price on the public tape.
-            //
-            // Cancelling the aggressor is the conservative choice: no trade is
-            // printed, no resting priority is disturbed, and the participant
-            // who created the situation is the one who absorbs it. It also
-            // cannot leave the book crossed, because the aggressor does not
-            // rest afterwards.
-            result.selfMatchBlocked = true;
-            break;
+            // Rejected: cancelling the *resting* order instead, which is CME's
+            // default. It keeps the aggressor working, but lets anyone vacate
+            // their own queue position by sending a crossing order -- a cheap
+            // reprice that modify() is careful to forbid. Rejected also:
+            // decrementing both, which is the most even-handed but prints a
+            // trade at a real price where no ownership changed, polluting the
+            // tape and any VWAP drawn from it.
+            into.selfMatchBlocked = true;
+            return;
         }
 
         // Only displayed quantity is available. For everything but an iceberg
         // that is the whole order; for an iceberg it is the current tranche,
         // and capping here is what forces the requeue below.
-        const Quantity qty = std::min(aggressor.remaining(), resting.visibleQty());
-        assert(qty > 0 && "a resting order must always show quantity");
+        const Quantity qty = std::min(available, front.visible);
+        EXCHANGE_PRECONDITION(qty > 0);
 
-        result.fills.push_back(Fill{
-            .aggressorId = aggressor.id(),
-            .restingId = resting.id(),
-            // The resting order's price, not the aggressor's -- see fill.hpp.
-            .price = level.price(),
-            .quantity = qty,
-            .aggressorAccount = aggressor.account(),
-            .restingAccount = resting.account(),
-            .aggressorSide = aggressor.side(),
-        });
+        into.fills.push_back(PlannedFill{.level = &level,
+                                         .resting = front.position,
+                                         // The resting order's price, never the
+                                         // aggressor's -- see fill.hpp.
+                                         .price = level.price(),
+                                         .quantity = qty,
+                                         .restingId = front.id,
+                                         .restingAccount = front.account});
 
-        level.applyFill(front, qty);
-        aggressor.onPartialFill(qty);
+        front.remaining -= qty;
+        front.visible -= qty;
+        available -= qty;
 
-        if (resting.isFilled()) {
-            result.filled.push_back(level.extract(front));
-        } else if (resting.needsReplenish()) {
-            // Hidden size remains but the tranche is spent. Refresh and go to
-            // the back: hiding size has to cost priority, or every order would
-            // be an iceberg.
-            level.replenishAndRequeue(front);
+        if (front.remaining == 0) {
+            queue.pop_front();
+        } else if (front.visible == 0) {
+            // Hidden size remains but the tranche is spent. It refreshes and
+            // goes to the back: hiding size has to cost priority, or every
+            // order would be an iceberg.
+            front.visible = std::min(front.display, front.remaining);
+            const Pending refreshed = front;
+            queue.pop_front();
+            queue.push_back(refreshed);
         }
         // Otherwise the resting order still shows quantity, which can only
         // mean the aggressor is exhausted -- the loop condition ends it.
     }
-
-    return result;
 }
 
 } // namespace exchange

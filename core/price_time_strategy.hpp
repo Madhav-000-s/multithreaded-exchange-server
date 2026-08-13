@@ -3,6 +3,7 @@
 #include "core/matching_strategy.hpp"
 #include "core/order.hpp"
 #include "core/price_level.hpp"
+#include "core/types.hpp"
 
 namespace exchange {
 
@@ -23,7 +24,8 @@ namespace exchange {
 /// sequence number would be the same answer computed more expensively.
 class PriceTimeStrategy final : public MatchingStrategy {
 public:
-    MatchResult match(Order& aggressor, PriceLevel& level) override;
+    void plan(const Order& aggressor, Quantity available, PriceLevel& level,
+              MatchPlan& into) const override;
 
     [[nodiscard]] const char* name() const noexcept override { return "price-time"; }
 };

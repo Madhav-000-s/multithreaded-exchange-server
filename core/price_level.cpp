@@ -1,5 +1,7 @@
 #include "core/price_level.hpp"
 
+#include "core/precondition.hpp"
+
 #include <cassert>
 #include <utility>
 
@@ -68,6 +70,19 @@ void PriceLevel::reduceQuantity(Iterator where, Quantity newQty) noexcept {
 
     totalQty_ = totalQty_ - oldTotal + order.remaining();
     visibleQty_ = visibleQty_ - oldVisible + order.visibleQty();
+}
+
+void PriceLevel::adopt(Queue& from, Iterator position) noexcept {
+    EXCHANGE_PRECONDITION(position != from.end());
+    const Order& order = **position;
+
+    totalQty_ += order.remaining();
+    visibleQty_ += order.visibleQty();
+
+    // Relinks the node between lists. No allocation, no element move, and
+    // `position` continues to name the same order afterwards, so the book's
+    // index entry can be built before this runs.
+    orders_.splice(orders_.end(), from, position);
 }
 
 } // namespace exchange

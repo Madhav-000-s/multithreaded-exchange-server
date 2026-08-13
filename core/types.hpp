@@ -56,7 +56,24 @@ enum class Side : std::uint8_t { Buy = 0, Sell = 1 };
 /// *highest* price and the best ask is the *lowest*, so with the comparator as
 /// a parameter, `levels_.begin()` is the best price on either side and every
 /// algorithm that walks outward from the touch is written exactly once.
-using BidOrdering = std::greater<Price>;
-using AskOrdering = std::less<Price>;
+/// Declared noexcept, which std::greater and std::less are not.
+///
+/// The commit phase claims that installing a price level and erasing one
+/// cannot throw. Both reduce to comparisons, so the claim only holds if the
+/// comparator is nothrow -- and comparing two integers obviously cannot throw,
+/// but std::greater<Price>::operator() is not *declared* noexcept, so the
+/// compiler will not take that on trust. Spelling the comparators out here
+/// turns an informal argument into one static_assert can check.
+struct BidOrdering {
+    [[nodiscard]] constexpr bool operator()(Price lhs, Price rhs) const noexcept {
+        return lhs > rhs;
+    }
+};
+
+struct AskOrdering {
+    [[nodiscard]] constexpr bool operator()(Price lhs, Price rhs) const noexcept {
+        return lhs < rhs;
+    }
+};
 
 } // namespace exchange

@@ -93,6 +93,15 @@ public:
     /// for.
     void reduceQuantity(Iterator where, Quantity newQty) noexcept;
 
+    /// Takes the order at `position` in `from` and appends it to this queue.
+    ///
+    /// noexcept, and that is the point: splice relinks an existing node rather
+    /// than allocating a new one, so an order can be pre-allocated into a
+    /// scratch list while throwing is still harmless and then committed here
+    /// once it must not be. `position` stays valid across the move, so the
+    /// book's index entry can be built before the commit.
+    void adopt(Queue& from, Iterator position) noexcept;
+
 private:
     Queue orders_;
     Quantity totalQty_{0};

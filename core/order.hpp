@@ -2,6 +2,7 @@
 
 #include "core/types.hpp"
 
+#include <memory>
 #include <optional>
 
 namespace exchange {
@@ -66,6 +67,16 @@ public:
     /// which shows only its display tranche.
     [[nodiscard]] virtual Quantity visibleQty() const noexcept { return remaining_; }
 
+    /// The quantity this order puts back on display when its tranche is
+    /// exhausted. Equal to remaining() for an order that hides nothing.
+    ///
+    /// Exists so the matching planner can simulate replenishment without a
+    /// dynamic_cast. The planner must predict the whole sweep before mutating
+    /// anything, and asking the order how much it would re-display keeps that
+    /// prediction inside the polymorphic interface rather than special-casing
+    /// iceberg in the strategy.
+    [[nodiscard]] virtual Quantity displaySize() const noexcept { return remaining_; }
+
     /// Applies an execution of `qty`. Precondition: qty <= visibleQty().
     virtual void onPartialFill(Quantity qty) noexcept;
 
@@ -103,6 +114,18 @@ public:
     /// Precondition: newQty <= remaining().
     virtual void reduceTo(Quantity newQty) noexcept;
 
+    /// A detached copy carrying new terms, keeping id, side and account.
+    ///
+    /// Exists for the requeue path of Book::modify. Amending the resting order
+    /// in place would mutate the book before the replacement is known to be
+    /// admissible; cloning lets the whole entry be planned and provisioned
+    /// while the original is still untouched, which is what makes modify
+    /// strong rather than merely basic.
+    ///
+    /// Pure virtual: only the concrete type knows which fields to carry over.
+    [[nodiscard]] virtual std::unique_ptr<Order> cloneAmended(Quantity newQty,
+                                                              Price newPrice) const = 0;
+
 protected:
     Order(OrderId id, Side side, AccountId account, Quantity qty) noexcept;
 
@@ -130,6 +153,9 @@ public:
 
     void amend(Quantity newQty, Price newPrice) noexcept override;
 
+    [[nodiscard]] std::unique_ptr<Order> cloneAmended(Quantity newQty,
+                                                      Price newPrice) const override;
+
 private:
     Price limit_;
 };
@@ -149,6 +175,9 @@ public:
     [[nodiscard]] std::optional<Price> restingPrice() const noexcept override {
         return std::nullopt;
     }
+
+    [[nodiscard]] std::unique_ptr<Order> cloneAmended(Quantity newQty,
+                                                      Price newPrice) const override;
 };
 
 /// A limit order that exposes only part of its size at a time.
@@ -167,7 +196,7 @@ public:
     IcebergOrder(OrderId id, Side side, AccountId account, Quantity totalQty, Price limit,
                  Quantity displaySize) noexcept;
 
-    [[nodiscard]] Quantity displaySize() const noexcept { return display_; }
+    [[nodiscard]] Quantity displaySize() const noexcept override { return display_; }
 
     /// Only the current tranche. An aggressor can never consume more than
     /// this in one execution, which is what forces the requeue.
@@ -183,6 +212,9 @@ public:
     void amend(Quantity newQty, Price newPrice) noexcept override;
 
     void reduceTo(Quantity newQty) noexcept override;
+
+    [[nodiscard]] std::unique_ptr<Order> cloneAmended(Quantity newQty,
+                                                      Price newPrice) const override;
 
 private:
     Quantity display_;
