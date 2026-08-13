@@ -25,7 +25,10 @@ add_executable(exchange_tests
     book_test.cpp
     iceberg_test.cpp
     book_iterator_test.cpp
-    analytics_test.cpp)
+    analytics_test.cpp
+    exception_safety_test.cpp
+    ownership_sweep_test.cpp
+    alloc_injection.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
 # reaching into the project proper is spelled "core/...".
@@ -62,3 +65,10 @@ add_test(NAME AnalyticsHasNoRawLoops
     COMMAND "${CMAKE_COMMAND}"
         -D "ANALYTICS_DIR=${PROJECT_SOURCE_DIR}/analytics"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/check_no_raw_loops.cmake")
+
+# The ownership sweep from ARCHITECTURE section 5, checked rather than trusted.
+# The library must reach every allocation through a smart pointer.
+add_test(NAME LibraryHasNoRawNewOrDelete
+    COMMAND "${CMAKE_COMMAND}"
+        -D "SOURCE_DIRS=${PROJECT_SOURCE_DIR}/core;${PROJECT_SOURCE_DIR}/analytics"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/check_no_raw_memory.cmake")
