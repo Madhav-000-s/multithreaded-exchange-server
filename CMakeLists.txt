@@ -141,8 +141,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Components
 # ---------------------------------------------------------------------------
-add_subdirectory(core)
+# concurrent first: core now depends on it for the engine command queue, and a
+# namespaced target must be defined before the directory that links it.
 add_subdirectory(concurrent)
+add_subdirectory(core)
 add_subdirectory(net)
 add_subdirectory(store)
 add_subdirectory(analytics)
