@@ -28,6 +28,9 @@ add_executable(exchange_tests
     analytics_test.cpp
     exception_safety_test.cpp
     ownership_sweep_test.cpp
+    thread_safe_queue_test.cpp
+    thread_pool_test.cpp
+    engine_test.cpp
     alloc_injection.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
