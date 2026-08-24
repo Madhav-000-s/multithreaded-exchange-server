@@ -83,5 +83,20 @@ class StorageError : public ExchangeError {
 public:
     using ExchangeError::ExchangeError;
 };
+/// A socket-level or reactor-level failure: bind refused, accept failed,
+/// epoll registration rejected.
+///
+/// Distinct from ProtocolError, which describes a peer sending nonsense. This
+/// one describes the local machine refusing to cooperate, and almost always
+/// means the server cannot start rather than that one session must be dropped.
+///
+/// Not in the ARCHITECTURE section 4 list, which predates the network layer
+/// being written. Added rather than folded into an existing type because the
+/// handling genuinely differs: a ProtocolError drops a session and the server
+/// carries on, a NetworkError during startup is fatal.
+class NetworkError : public ExchangeError {
+public:
+    using ExchangeError::ExchangeError;
+};
 
 } // namespace exchange
