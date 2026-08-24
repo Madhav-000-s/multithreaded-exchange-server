@@ -31,6 +31,8 @@ add_executable(exchange_tests
     thread_safe_queue_test.cpp
     thread_pool_test.cpp
     engine_test.cpp
+    protocol_test.cpp
+    net_integration_test.cpp
     alloc_injection.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
