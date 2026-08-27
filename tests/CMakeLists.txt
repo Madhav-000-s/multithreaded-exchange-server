@@ -33,11 +33,24 @@ add_executable(exchange_tests
     engine_test.cpp
     protocol_test.cpp
     net_integration_test.cpp
+    wal_test.cpp
+    sqlite_store_test.cpp
+    recovery_test.cpp
     alloc_injection.cpp)
 
 # Test-local headers (order_factory.hpp) are included unqualified; everything
 # reaching into the project proper is spelled "core/...".
 target_include_directories(exchange_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# The crash harness is a separate executable, not a gtest case. Forking a
+# process that already has threads leaves the child with one thread and any
+# mutex the others held locked forever, so the child would deadlock on its
+# first allocation. exec() of a fresh binary avoids that entirely.
+add_executable(crash_worker crash_worker.cpp)
+target_link_libraries(crash_worker PRIVATE
+    exchange::flags
+    exchange::core
+    exchange::store)
 
 target_link_libraries(exchange_tests PRIVATE
     exchange::flags
@@ -47,6 +60,9 @@ target_link_libraries(exchange_tests PRIVATE
     exchange::store
     exchange::analytics
     GTest::gtest_main)
+
+# The test binary needs to find the worker wherever CTest runs it from.
+add_dependencies(exchange_tests crash_worker)
 
 if(EXCHANGE_TEST_LAUNCHER)
     # gtest_discover_tests both enumerates and runs the binary through
@@ -60,8 +76,12 @@ include(GoogleTest)
 
 # Registers each TEST() with CTest individually rather than as one opaque
 # binary, so a failure names the case and -j actually parallelises.
+# The crash tests need the worker's absolute path, which only the generator
+# knows. Passed through the environment rather than hard-coded, so the tests
+# work regardless of where CTest is invoked from.
 gtest_discover_tests(exchange_tests
-    DISCOVERY_TIMEOUT 30)
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES ENVIRONMENT "EXCHANGE_CRASH_WORKER=$<TARGET_FILE:crash_worker>")
 
 # Phase 2's exit criterion is a property of the source, not of a running
 # binary, so it is checked as a source-level test rather than asserted in a
