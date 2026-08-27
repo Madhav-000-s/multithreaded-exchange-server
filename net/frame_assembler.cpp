@@ -1,8 +1,8 @@
 #include "net/frame_assembler.hpp"
 
 #include "core/exceptions.hpp"
+#include "core/wire.hpp"
 #include "net/protocol.hpp"
-#include "net/wire.hpp"
 
 #include <cstddef>
 #include <cstdint>

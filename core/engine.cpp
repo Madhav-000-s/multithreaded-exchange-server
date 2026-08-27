@@ -1,28 +1,13 @@
 #include "core/engine.hpp"
 
+#include "core/apply.hpp"
 #include "core/command.hpp"
 #include "core/exceptions.hpp"
 
 #include <optional>
 #include <utility>
-#include <variant>
 
 namespace exchange {
-namespace {
-
-/// The overload-set idiom: assembles several lambdas into one callable so
-/// std::visit can dispatch on the alternative. Adding a Command alternative
-/// without a matching lambda is then a compile error, not a run-time
-/// fall-through.
-template <typename... Handlers>
-struct Overloaded : Handlers... {
-    using Handlers::operator()...;
-};
-
-template <typename... Handlers>
-Overloaded(Handlers...) -> Overloaded<Handlers...>;
-
-} // namespace
 
 Engine::Engine(std::size_t capacity) : queue_(capacity) {}
 
@@ -59,6 +44,16 @@ void Engine::stop() noexcept {
     if (thread_.joinable()) {
         thread_.join();
     }
+
+    // Flush after the engine has drained, so a clean shutdown loses nothing
+    // even under a batching or non-syncing policy. Best effort: stop() is
+    // noexcept and there is nobody left to report to.
+    if (log_ != nullptr) {
+        try {
+            log_->flush();
+        } catch (const ExchangeError&) {
+        }
+    }
 }
 
 bool Engine::submit(Command command) {
@@ -79,6 +74,12 @@ void Engine::run() noexcept {
     while (std::optional<Command> command = queue_.pop()) {
         try {
             apply(std::move(*command));
+        } catch (const StorageError&) {
+            // The command could not be made durable, so it was deliberately
+            // not applied. Counted separately from a rejection because the
+            // meanings differ: a rejection is the book declining, this is the
+            // exchange being unable to promise anything.
+            storageFailures_.fetch_add(1, std::memory_order_relaxed);
         } catch (const ExchangeError&) {
             // A rejected order is a normal outcome, not an engine failure.
             rejected_.fetch_add(1, std::memory_order_relaxed);
@@ -96,43 +97,41 @@ void Engine::run() noexcept {
 }
 
 void Engine::apply(Command&& command) {
-    std::visit(Overloaded{
-                   [this](SubmitCommand&& submit) {
-                       SubmitResult result = book_.submit(std::move(submit.order));
-                       for (const Fill& fill : result.fills) {
-                           fills_.fetch_add(1, std::memory_order_relaxed);
-                           if (onFill_) {
-                               onFill_(fill);
-                           }
-                       }
-                       processed_.fetch_add(1, std::memory_order_relaxed);
-                   },
-                   [this](const CancelCommand& cancel) {
-                       const std::unique_ptr<Order> removed = book_.cancel(cancel.id);
-                       if (removed == nullptr) {
-                           rejected_.fetch_add(1, std::memory_order_relaxed);
-                           return;
-                       }
-                       processed_.fetch_add(1, std::memory_order_relaxed);
-                   },
-                   [this](const ModifyCommand& modify) {
-                       const ModifyResult result =
-                           book_.modify(modify.id, modify.quantity, modify.price);
-                       for (const Fill& fill : result.fills) {
-                           fills_.fetch_add(1, std::memory_order_relaxed);
-                           if (onFill_) {
-                               onFill_(fill);
-                           }
-                       }
-                       if (result.status == ModifyStatus::NotFound ||
-                           result.status == ModifyStatus::Rejected) {
-                           rejected_.fetch_add(1, std::memory_order_relaxed);
-                           return;
-                       }
-                       processed_.fetch_add(1, std::memory_order_relaxed);
-                   },
-               },
-               std::move(command));
+    // ---- Write ahead. ----
+    //
+    // The record is made durable *before* the mutation is visible. A crash
+    // between these two lines loses nothing that was acknowledged: recovery
+    // replays the record and reaches the state the client was told about.
+    //
+    // The reverse order is write-behind, and it loses exactly the orders
+    // acknowledged just before the crash -- the ones a participant is most
+    // certain they placed. The ordering is the whole point of the name.
+    //
+    // If the append throws, this function exits before touching the book, so
+    // the log and the book cannot disagree.
+    if (log_ != nullptr) {
+        (void)log_->append(command);
+    }
+
+    // ---- Then mutate. ----
+    //
+    // applyCommand is the same function recovery replays through, which is
+    // what makes a recovered book identical to the one that was logged rather
+    // than merely similar to it.
+    const ApplyOutcome outcome = applyCommand(book_, std::move(command));
+
+    for (const Fill& fill : outcome.fills) {
+        fills_.fetch_add(1, std::memory_order_relaxed);
+        if (onFill_) {
+            onFill_(fill);
+        }
+    }
+
+    if (outcome.accepted) {
+        processed_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        rejected_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 } // namespace exchange

@@ -4,11 +4,11 @@
 
 #include "core/exceptions.hpp"
 #include "core/types.hpp"
+#include "core/wire.hpp"
 #include "net/frame_assembler.hpp"
 #include "net/protocol.hpp"
 #include "net/server.hpp"
 #include "net/socket.hpp"
-#include "net/wire.hpp"
 
 #include <gtest/gtest.h>
 

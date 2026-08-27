@@ -11,6 +11,12 @@ namespace exchange::wire {
 
 /// Little-endian, field by field, with explicit shifts.
 ///
+/// Lives in core rather than net because two components serialise: the wire
+/// protocol and the write-ahead log. Both need exactly these guarantees --
+/// fixed width, defined byte order, no alignment assumptions -- and a WAL that
+/// had to depend on the network layer to write a number would have the
+/// dependency graph backwards.
+///
 /// The tempting alternative is to `memcpy` a packed struct onto the wire. It is
 /// wrong three separate ways, and every one of them is silent:
 ///

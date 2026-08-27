@@ -6,9 +6,9 @@
 
 #include "core/exceptions.hpp"
 #include "core/types.hpp"
+#include "core/wire.hpp"
 #include "net/frame_assembler.hpp"
 #include "net/protocol.hpp"
-#include "net/wire.hpp"
 
 #include <gtest/gtest.h>
 

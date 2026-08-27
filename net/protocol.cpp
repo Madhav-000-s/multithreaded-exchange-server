@@ -2,7 +2,7 @@
 
 #include "core/exceptions.hpp"
 #include "core/types.hpp"
-#include "net/wire.hpp"
+#include "core/wire.hpp"
 
 #include <cstddef>
 #include <cstdint>

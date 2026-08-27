@@ -3,6 +3,7 @@
 #include "concurrent/thread_safe_queue.hpp"
 #include "core/book.hpp"
 #include "core/command.hpp"
+#include "core/command_log.hpp"
 #include "core/fill.hpp"
 #include "core/types.hpp"
 
@@ -46,6 +47,25 @@ public:
 
     /// Stops and joins. Safe to destroy without an explicit stop().
     ~Engine();
+
+    /// Installs the write-ahead log.
+    ///
+    /// Must be set before start(): afterwards the engine thread reads the
+    /// pointer without synchronisation, which is only sound because it stops
+    /// changing. Null means no durability, which is what the pure matching
+    /// tests use.
+    ///
+    /// Not owned. The log outlives the engine, because shutdown flushes it
+    /// after the engine has drained.
+    void setCommandLog(ICommandLog* log) noexcept { log_ = log; }
+
+    /// Commands that could not be logged, and were therefore not applied.
+    ///
+    /// Non-zero means the exchange lost writes it refused rather than writes
+    /// it silently dropped -- the distinction that matters after an incident.
+    [[nodiscard]] std::size_t storageFailures() const noexcept {
+        return storageFailures_.load(std::memory_order_relaxed);
+    }
 
     /// Installs the fill callback. Must be called before start(): afterwards
     /// the engine thread reads it without synchronisation, which is only
@@ -100,6 +120,7 @@ private:
 
     Book book_;
     ThreadSafeQueue<Command> queue_;
+    ICommandLog* log_{nullptr};
     std::thread thread_;
     FillHandler onFill_;
 
@@ -119,6 +140,7 @@ private:
     std::atomic<std::size_t> processed_{0};
     std::atomic<std::size_t> rejected_{0};
     std::atomic<std::size_t> fills_{0};
+    std::atomic<std::size_t> storageFailures_{0};
 };
 
 } // namespace exchange

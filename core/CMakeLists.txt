@@ -2,6 +2,7 @@
 #         BookIterator. The only component permitted to mutate book state.
 add_library(exchange_core STATIC
     fill.cpp
+    apply.cpp
     engine.cpp
     order.cpp
     price_level.cpp
